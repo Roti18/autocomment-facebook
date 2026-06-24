@@ -54,10 +54,12 @@ export const config: BotConfig = {
     .split(',')
     .map((k) => k.trim().toLowerCase())
     .filter(Boolean),
-  maxPostAgeDays: parseInt(process.env.MAX_POST_AGE_DAYS || '5', 10),
   maxCommentsPerGroup: parseInt(process.env.MAX_COMMENTS_PER_GROUP || '3', 10),
   commentTemplatePath: commentTemplatePath,
   commentContent: getCommentContent(commentTemplatePath),
+  scrollCount: parseInt(process.env.SCROLL_COUNT || '4', 10),
+  scrollDelaySeconds: parseInt(process.env.SCROLL_DELAY_SECONDS || '3', 10),
+  commentImagePath: process.env.COMMENT_IMAGE_PATH ? path.resolve(process.env.COMMENT_IMAGE_PATH) : null,
 };
 
 // Default seed groups: parsed from groups.json if exists

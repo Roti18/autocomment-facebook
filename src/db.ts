@@ -16,10 +16,22 @@ export function initDb() {
   db.prepare(`
     CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_name TEXT,
       group_url TEXT NOT NULL UNIQUE,
       status TEXT NOT NULL CHECK(status IN ('active', 'inactive')) DEFAULT 'active'
     )
   `).run();
+
+  // Migration: check if group_name column exists, if not, add it
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(groups)").all() as any[];
+    const hasGroupName = tableInfo.some(col => col.name === 'group_name');
+    if (!hasGroupName) {
+      db.prepare("ALTER TABLE groups ADD COLUMN group_name TEXT").run();
+    }
+  } catch (err) {
+    console.error("Migration error:", err);
+  }
 
   // Create comments_queue table
   db.prepare(`
@@ -110,15 +122,24 @@ export function updateQueueStatus(
 /**
  * Seed database with target groups.
  */
-export function seedGroups(groups: { url: string }[]) {
+export function seedGroups(groups: { name: string; url: string }[]) {
+  const check = db.prepare("SELECT id FROM groups WHERE group_url = ?");
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO groups (group_url, status)
-    VALUES (?, 'active')
+    INSERT INTO groups (group_url, group_name, status)
+    VALUES (?, ?, 'active')
+  `);
+  const update = db.prepare(`
+    UPDATE groups SET group_name = ? WHERE group_url = ?
   `);
 
   const transaction = db.transaction((groupList) => {
     for (const group of groupList) {
-      insert.run(group.url);
+      const existing = check.get(group.url);
+      if (existing) {
+        update.run(group.name, group.url);
+      } else {
+        insert.run(group.url, group.name);
+      }
     }
   });
 

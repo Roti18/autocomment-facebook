@@ -1,5 +1,6 @@
 export interface Group {
   id: number;
+  group_name: string | null;
   group_url: string;
   status: 'active' | 'inactive';
 }
@@ -25,8 +26,10 @@ export interface BotConfig {
   postIntervalMinutes: number;
   myProfileUrl: string | null;
   targetKeywords: string[];
-  maxPostAgeDays: number;
   maxCommentsPerGroup: number;
   commentTemplatePath: string;
   commentContent: string;
+  scrollCount: number;
+  scrollDelaySeconds: number;
+  commentImagePath: string | null;
 }

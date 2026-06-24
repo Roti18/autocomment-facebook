@@ -8,3 +8,9 @@ config.json
 FacebookElementsComment.txt
 Facebook-post-Auto-Comment-Tools-For-Facebook/
 *.log
+
+# Data sensitif - jangan pernah di-commit
+groups.json
+groups*.json
+comment_template.txt
+assets/

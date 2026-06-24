@@ -1,6 +1,7 @@
 import { chromium, Locator, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { config, resolveSpintax, getSeedGroups } from './config';
 import {
   initDb,
@@ -24,20 +25,27 @@ function sleep(ms: number): Promise<void> {
  * Parse relative post age text (e.g. "5 hr", "kemarin", "2 j", "1w", "25 Juni") into age in days.
  */
 function getPostAgeInDays(timeText: string): number {
-  timeText = timeText.toLowerCase().trim();
+  timeText = timeText.toLowerCase().replace(/\s+/g, '');
   
   // Minutes / hours / just now / barusan
   if (
     timeText.includes('menit') || 
-    timeText.includes('jam') || 
     timeText.includes('min') || 
-    timeText.endsWith('m') || 
-    timeText.endsWith('j') || 
-    timeText.endsWith('h') ||
-    timeText.includes('just now') || 
-    timeText.includes('baru saja') || 
+    timeText.includes('baru') || 
+    timeText.includes('justnow') || 
     timeText.includes('sec') || 
-    timeText.includes('dtk')
+    timeText.includes('dtk') ||
+    /\d+m/.test(timeText)
+  ) {
+    return 0; // Less than 1 day
+  }
+  
+  // Hours
+  if (
+    timeText.includes('jam') || 
+    timeText.includes('hr') || 
+    /\d+h/.test(timeText) ||
+    /\d+j/.test(timeText)
   ) {
     return 0; // Less than 1 day
   }
@@ -47,25 +55,19 @@ function getPostAgeInDays(timeText: string): number {
   }
   
   // Days (e.g., "3 hr", "3 hari", "3 days", "3d")
-  const dayMatch = timeText.match(/(\d+)\s*(hr|hari|d|day|days)/);
+  const dayMatch = timeText.match(/(\d+)(hr|hari|d|day|days)/);
   if (dayMatch) {
     return parseInt(dayMatch[1], 10);
   }
   
-  // If it ends with 'd' (e.g., '4d')
-  const dMatch = timeText.match(/(\d+)d$/);
-  if (dMatch) {
-    return parseInt(dMatch[1], 10);
-  }
-  
   // Weeks (e.g., "1 mg", "1 minggu", "1w", "1 week")
-  const weekMatch = timeText.match(/(\d+)\s*(mg|minggu|w|week|weeks)/);
+  const weekMatch = timeText.match(/(\d+)(mg|minggu|w|week|weeks)/);
   if (weekMatch) {
     return parseInt(weekMatch[1], 10) * 7;
   }
   
   // Months (e.g., "1 bln", "1 bulan", "1 month")
-  const monthMatch = timeText.match(/(\d+)\s*(bln|bulan|m|month|months)/);
+  const monthMatch = timeText.match(/(\d+)(bln|bulan|m|month|months)/);
   if (monthMatch) {
     return parseInt(monthMatch[1], 10) * 30;
   }
@@ -82,6 +84,31 @@ function getPostAgeInDays(timeText: string): number {
   }
 
   return 0; // Default fallback to process the post
+}
+
+/**
+ * Extract numeric post ID from a Facebook URL.
+ */
+function extractPostId(href: string | null): string | null {
+  if (!href) return null;
+  
+  // 1. Direct posts/permalink path
+  const pathMatch = href.match(/\/(?:posts|permalink|multi_permalink)\/(\d+)/);
+  if (pathMatch) return pathMatch[1];
+
+  // 2. Query param story_fbid
+  const storyMatch = href.match(/[?&]story_fbid=(\d+)/);
+  if (storyMatch) return storyMatch[1];
+
+  // 3. Query param set=gm.456 or set=pcb.456
+  const setMatch = href.match(/[?&]set=(?:pcb|gm)\.(\d+)/);
+  if (setMatch) return setMatch[1];
+
+  // 4. Query param fbid
+  const fbidMatch = href.match(/[?&]fbid=(\d+)/);
+  if (fbidMatch) return fbidMatch[1];
+
+  return null;
 }
 
 /**
@@ -318,50 +345,68 @@ async function main() {
     console.log('===============================================================\n');
 
     for (const group of activeGroups) {
-      console.log(`Scraping Group URL: ${group.group_url}`);
+      const displayName = group.group_name || 'Unnamed Group';
+      console.log(`Scraping Group: ${displayName} (${group.group_url})`);
       try {
-        await page.goto(group.group_url, { waitUntil: 'domcontentloaded' });
-        await sleep(5000); // Allow DOM hydration
+        try {
+          await page.goto(group.group_url, { waitUntil: 'commit', timeout: 15000 });
+        } catch (gotoErr) {
+          // Ignore navigation timeout if we can still find the posts
+        }
+        await sleep(3000); // Allow DOM hydration
 
-        // Scroll down 4 times to trigger lazy loading of recent posts
-        console.log('Scrolling feed for recent posts...');
-        for (let j = 0; j < 4; j++) {
-          await page.evaluate(() => window.scrollBy(0, 800));
-          await sleep(2500);
+        // Scroll down incrementally and collect posts progressively
+        console.log(`Scrolling feed for recent posts (${config.scrollCount} times, delay: ${config.scrollDelaySeconds}s)...`);
+        for (let j = 0; j < config.scrollCount; j++) {
+          await page.evaluate(() => window.scrollBy(0, 1000));
+          await sleep(config.scrollDelaySeconds * 1000);
         }
 
         // Locate post article containers using aria-posinset
         const postElements = await page.locator('div[aria-posinset]').all();
-        console.log(`Found ${postElements.length} post containers in this viewport.`);
+        console.log(`Found ${postElements.length} posts on page to analyze.`);
 
         let addedCount = 0;
-        for (const post of postElements) {
+        for (let idx = 0; idx < postElements.length; idx++) {
+          const post = postElements[idx];
           try {
             // 1. Extract Author Name & Profile Link
-            const authorLocator = post.locator('span[data-ad-rendering-role="title"], span.xt0psk2 strong, h3 strong, h2 strong, a[role="link"] strong').first();
-            let authorName = 'Unknown Author';
-            if (await authorLocator.isVisible()) {
-              authorName = await authorLocator.innerText();
-            } else {
-              const profileLink = post.locator('a[role="link"][aria-label*="Profil"], a[role="link"][aria-label*="Profile"]').first();
-              if (await profileLink.isVisible()) {
-                const label = await profileLink.getAttribute('aria-label');
-                if (label) {
-                  authorName = label.replace(/Profil\s+|Profile\s+of\s+/i, '').trim();
-                }
-              }
-            }
+            const authorLinkLocator = post.locator([
+              'a[role="link"][href*="/user/"]',
+              'a[role="link"][href*="/people/"]',
+              'a[role="link"][href*="/profile.php"]',
+              'h3 a[role="link"]',
+              'h2 a[role="link"]'
+            ].join(', ')).first();
 
-            const authorLinkLocator = post.locator('a[role="link"][href*="/user/"], h3 a[role="link"], h2 a[role="link"], span.xt0psk2 a[role="link"]').first();
+            let authorName = 'Unknown Author';
             let authorProfileUrl = '';
-            if (await authorLinkLocator.isVisible()) {
+
+            if (await authorLinkLocator.count() > 0) {
               const href = await authorLinkLocator.getAttribute('href');
               if (href) {
                 try {
                   const urlObj = new URL(href, 'https://facebook.com');
                   urlObj.search = '';
                   authorProfileUrl = urlObj.toString();
-                } catch (e) {}
+                } catch (e) {
+                  authorProfileUrl = href;
+                }
+              }
+              const nameText = await authorLinkLocator.innerText();
+              if (nameText && nameText.trim()) {
+                authorName = nameText.trim();
+              }
+            }
+
+            // Fallback author name extraction
+            if (authorName === 'Unknown Author') {
+              const titleLocator = post.locator('span[data-ad-rendering-role="title"], span.xt0psk2 strong, h3 strong, h2 strong').first();
+              if (await titleLocator.isVisible()) {
+                const titleText = await titleLocator.innerText();
+                if (titleText && titleText.trim()) {
+                  authorName = titleText.trim();
+                }
               }
             }
 
@@ -369,6 +414,7 @@ async function main() {
             const isOwnPost = (myProfileUrl && authorProfileUrl && authorProfileUrl === myProfileUrl) ||
                               (process.env.MY_PROFILE_NAME && authorName.toLowerCase() === process.env.MY_PROFILE_NAME.toLowerCase());
             if (isOwnPost) {
+              console.log(`  -> Skipped post ${idx + 1} by own account: ${authorName}`);
               continue;
             }
 
@@ -377,7 +423,8 @@ async function main() {
             const links = await post.locator('a[role="link"]').all();
             for (const link of links) {
               const href = await link.getAttribute('href');
-              if (!href) continue;
+              const ariaHidden = await link.getAttribute('aria-hidden');
+              if (!href || ariaHidden === 'true') continue;
 
               // Exclude profile pages, stories, photos, videos, and group navigation links
               if (
@@ -399,29 +446,39 @@ async function main() {
               }
             }
 
-            if (!timestampLink) {
-              continue;
-            }
+            // Silently skip non-post visual elements (spacers, create-post box, loading skeletons, etc.)
+            if (!timestampLink) continue;
 
             const href = await timestampLink.getAttribute('href');
             if (!href) continue;
 
             const timeText = await timestampLink.innerText();
+            const cleanTimeText = timeText.replace(/\n+/g, '').trim();
 
-            // Filter: Age Check (limit to under maxPostAgeDays)
-            const ageDays = getPostAgeInDays(timeText);
-            if (ageDays > config.maxPostAgeDays) {
-              continue;
+            // 3. Extract Post Text - click "See More" first if available
+            try {
+              const seeMoreBtn = post.locator(
+                'div[role="button"]:has-text("Lihat selengkapnya"), ' +
+                'div[role="button"]:has-text("See More"), ' +
+                'div[role="button"]:has-text("See more"), ' +
+                'span:has-text("Lihat selengkapnya"), ' +
+                'span:has-text("See more")'
+              ).first();
+              if (await seeMoreBtn.isVisible()) {
+                await seeMoreBtn.click();
+                await sleep(500);
+              }
+            } catch (_) {
+              // Ignore if see more click fails
             }
 
-            // 3. Extract Post Text & Keyword Check
+            // Collect text from multiple selectors
             const messageLocators = [
               post.locator('div[data-ad-preview="message"]').first(),
               post.locator('span[data-ad-rendering-role="story_message"]').first(),
-              post.locator('span[data-ad-rendering-role="description"]').first(),
-              post.locator('div[dir="auto"]').first()
+              post.locator('span[data-ad-rendering-role="description"]').first()
             ];
-            
+
             let postText = '';
             for (const loc of messageLocators) {
               if (await loc.isVisible()) {
@@ -429,59 +486,92 @@ async function main() {
                 if (postText.trim()) break;
               }
             }
-            
-            const matchedKeyword = config.targetKeywords.find(keyword => postText.toLowerCase().includes(keyword));
+
+            // Fallback: collect all div[dir="auto"] text blocks inside this post
+            if (!postText.trim()) {
+              const divs = await post.locator('div[dir="auto"]').all();
+              const textBlocks: string[] = [];
+              for (const div of divs) {
+                const text = await div.innerText();
+                if (text.trim()) textBlocks.push(text.trim());
+              }
+              postText = textBlocks.join('\n');
+            }
+
+            // Keyword check - case insensitive
+            const postTextLower = postText.toLowerCase();
+            const matchedKeyword = config.targetKeywords.find(keyword => postTextLower.includes(keyword.toLowerCase()));
             if (!matchedKeyword && config.targetKeywords.length > 0) {
+              console.log(`  -> Skipped post ${idx + 1} by ${authorName}: No matching keywords found in text.`);
               continue;
             }
 
-            // 4. Resolve Permalink & Post ID ONLY for matching posts
+            // 4. Resolve Permalink & Post ID
             let postUrl = '';
             let postId = '';
 
-            // If it is already a direct permalink URL
-            if (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/multi_permalink/')) {
-              const urlObj = new URL(href, 'https://facebook.com');
-              urlObj.search = '';
-              postUrl = urlObj.toString();
-              const match = href.match(/\/(?:permalink|posts|multi_permalink)\/(\d+)/);
-              postId = match ? match[1] : postUrl;
-            } else {
-              // Resolve the relative query link (__cft__) by navigating directly in a new tab
+            // Fast path: extract numeric post ID from links in the DOM
+            const allLinks = await post.locator('a').all();
+            for (const link of allLinks) {
+              const hrefAttr = await link.getAttribute('href');
+              if (hrefAttr) {
+                const id = extractPostId(hrefAttr);
+                if (id) {
+                  postId = id;
+                  const groupUrlMatch = group.group_url.match(/\/groups\/([^\/]+)/);
+                  const groupNameOrId = groupUrlMatch ? groupUrlMatch[1] : '';
+                  postUrl = `https://www.facebook.com/groups/${groupNameOrId}/posts/${postId}/`;
+                  break;
+                }
+              }
+            }
+
+            // Fallback: open link in new tab and wait for redirect
+            if (!postId) {
               const absoluteUrl = new URL(href, page.url()).toString();
               const newPage = await context.newPage();
               try {
-                await newPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-                const rawUrl = newPage.url();
-                if (rawUrl) {
-                  const urlObj = new URL(rawUrl, 'https://facebook.com');
+                await newPage.goto(absoluteUrl, { waitUntil: 'commit', timeout: 10000 });
+                let resolvedUrl = '';
+                for (let retry = 0; retry < 10; retry++) {
+                  resolvedUrl = newPage.url();
+                  if (resolvedUrl.includes('/posts/') || resolvedUrl.includes('/permalink/') || resolvedUrl.includes('/multi_permalink/') || resolvedUrl.includes('story_fbid')) {
+                    break;
+                  }
+                  await sleep(500);
+                }
+                if (resolvedUrl) {
+                  const urlObj = new URL(resolvedUrl, 'https://facebook.com');
                   urlObj.search = '';
                   postUrl = urlObj.toString();
-                  
-                  const match = postUrl.match(/\/(?:permalink|posts|multi_permalink)\/(\d+)/);
-                  postId = match ? match[1] : postUrl;
+                  const extractedId = extractPostId(resolvedUrl);
+                  postId = extractedId || '';
                 }
               } catch (e: any) {
-                console.warn(`Error resolving permalink directly: ${e.message}`);
-                const rawUrl = newPage.url();
-                if (rawUrl) {
-                  const urlObj = new URL(rawUrl, 'https://facebook.com');
-                  urlObj.search = '';
-                  postUrl = urlObj.toString();
-                  const match = postUrl.match(/\/(?:permalink|posts|multi_permalink)\/(\d+)/);
-                  postId = match ? match[1] : postUrl;
-                }
+                console.warn(`Error resolving permalink: ${e.message}`);
               } finally {
                 await newPage.close();
               }
             }
 
-            if (!postId) {
-              continue; // Skip if we cannot identify the post permalink URL
+            // Last resort: generate a stable hash-based ID from post text + cleanTimeText
+            if (!postId || !/^\d+$/.test(postId)) {
+              if (postText.trim()) {
+                const hashSource = `${group.group_url}::${cleanTimeText}::${postText.slice(0, 200)}`;
+                const hash = crypto.createHash('sha256').update(hashSource).digest('hex');
+                postId = `hash_${hash.slice(0, 16)}`;
+                const groupUrlMatch = group.group_url.match(/\/groups\/([^\/]+)/);
+                const groupNameOrId = groupUrlMatch ? groupUrlMatch[1] : '';
+                postUrl = `${group.group_url}?hash_post=${hash.slice(0, 8)}`;
+                console.log(`  -> Used hash-based ID for post ${idx + 1} by ${authorName}: ${postId}`);
+              } else {
+                continue; // Cannot identify post at all
+              }
             }
 
             // Skip if already in database queue
             if (hasPostInQueue(postId)) {
+              console.log(`  -> Skipped post ${idx + 1} by ${authorName}: Post ${postId} is already in the queue.`);
               continue;
             }
 
@@ -489,7 +579,7 @@ async function main() {
             const success = addToQueue(postId, group.id, postUrl, postText, authorName);
             if (success) {
               addedCount++;
-              console.log(`[Queue Added] ID: ${postId} | Author: ${authorName} | Time: ${timeText} (${ageDays} days) | Keyword: "${matchedKeyword}"`);
+              console.log(`[Queue Added] ID: ${postId} | Author: ${authorName} | Time: ${cleanTimeText} | Keyword: "${matchedKeyword}"`);
             }
           } catch (postErr) {
             // Catch error in single post scrape to avoid crashing the whole group scrape loop
@@ -508,13 +598,14 @@ async function main() {
     console.log('===============================================================\n');
 
     for (const group of activeGroups) {
+      const displayName = group.group_name || 'Unnamed Group';
       const queueItems = getPendingQueue(group.id, config.maxCommentsPerGroup);
       if (queueItems.length === 0) {
-        console.log(`No pending queue comments for Group ID: ${group.id}.`);
+        console.log(`No pending queue comments for Group: ${displayName}.`);
         continue;
       }
 
-      console.log(`Processing ${queueItems.length} comments for Group ID: ${group.id}...`);
+      console.log(`Processing ${queueItems.length} comments for Group: ${displayName}...`);
 
       for (const item of queueItems) {
         console.log(`\nDirecting to post permalink: ${item.post_url}`);
@@ -571,6 +662,50 @@ async function main() {
           await commentInput.focus();
           await page.keyboard.insertText(resolvedComment);
           await sleep(1000);
+
+          // Attach image to comment if configured
+          if (config.commentImagePath) {
+            if (fs.existsSync(config.commentImagePath)) {
+              console.log(`Attaching image to comment: ${config.commentImagePath}`);
+              try {
+                // Try direct file input first (fastest path)
+                const fileInput = page.locator('input[type="file"]').first();
+                if (await fileInput.count() > 0) {
+                  await fileInput.setInputFiles(config.commentImagePath);
+                } else {
+                  // Click the camera/photo icon in the comment bar
+                  const photoBtn = page.locator([
+                    'div[aria-label="Foto/video"][role="button"]',
+                    'div[aria-label="Photo/video"][role="button"]',
+                    'div[aria-label="Foto"][role="button"]',
+                    'div[aria-label="Photo"][role="button"]',
+                    'i[data-visualcompletion="css-img"][style*="camera"]'
+                  ].join(', ')).first();
+
+                  if (await photoBtn.isVisible()) {
+                    const [fileChooser] = await Promise.all([
+                      page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null),
+                      photoBtn.click()
+                    ]);
+                    if (fileChooser) {
+                      await fileChooser.setFiles(config.commentImagePath);
+                    } else {
+                      // Last resort: global file input
+                      await page.setInputFiles('input[type="file"]', config.commentImagePath);
+                    }
+                  } else {
+                    console.warn('Warning: Could not find photo button in comment bar. Skipping image attachment.');
+                  }
+                }
+                console.log('Waiting 4s for image upload preview...');
+                await sleep(4000);
+              } catch (imgErr: any) {
+                console.warn(`Warning: Image attach failed (${imgErr.message}). Sending text-only comment.`);
+              }
+            } else {
+              console.warn(`Warning: COMMENT_IMAGE_PATH set to "${config.commentImagePath}" but file does not exist. Skipping image.`);
+            }
+          }
 
           // Submit by pressing Enter
           await page.keyboard.press('Enter');
