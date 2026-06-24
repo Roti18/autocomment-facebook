@@ -615,10 +615,16 @@ async function main() {
           continue;
         }
 
-        console.log(`\nDirecting to post permalink: ${item.post_url}`);
+        // Normalize URL to web.facebook.com to avoid www → web redirect interruption
+        const postUrl = item.post_url.replace('https://www.facebook.com', 'https://web.facebook.com');
+        console.log(`\nDirecting to post permalink: ${postUrl}`);
         try {
-          await page.goto(item.post_url, { waitUntil: 'domcontentloaded' });
-          await sleep(5000); // Allow DOM hydration
+          try {
+            await page.goto(postUrl, { waitUntil: 'commit', timeout: 15000 });
+          } catch (gotoErr) {
+            // Ignore redirect-interrupted navigation errors - page usually still loads
+          }
+          await sleep(4000); // Allow DOM hydration after redirect
 
           // Locate commenting textbox
           const commentInputSelectors = [
