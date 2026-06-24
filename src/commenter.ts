@@ -608,6 +608,13 @@ async function main() {
       console.log(`Processing ${queueItems.length} comments for Group: ${displayName}...`);
 
       for (const item of queueItems) {
+        // Skip hash-based posts - no direct permalink, cannot find comment box
+        if (item.post_id.startsWith('hash_')) {
+          console.log(`  -> Skipping hash-based post ${item.post_id}: no direct permalink available.`);
+          updateQueueStatus(item.id, 'failed', 'Hash-based post ID has no direct permalink.');
+          continue;
+        }
+
         console.log(`\nDirecting to post permalink: ${item.post_url}`);
         try {
           await page.goto(item.post_url, { waitUntil: 'domcontentloaded' });
@@ -658,20 +665,19 @@ async function main() {
           const resolvedComment = resolveSpintax(config.commentContent);
           console.log(`Submitting Comment (with links):\n"${resolvedComment}"`);
 
-          // Helper: check if FB rejected the comment (error toast or input still has text)
+          // Helper: check if FB rejected the comment
+          // Only trust specific error text - avoid false positives from div[role="alert"]
           const isCommentRejected = async (): Promise<boolean> => {
-            // Check for FB error alert/toast
-            const errorSelectors = [
-              'div[role="alert"]',
+            const errorTexts = [
               'span:has-text("tidak dapat memposting")',
               'span:has-text("can\'t post")',
-              'span:has-text("blocked")',
               'span:has-text("diblokir")',
               'span:has-text("spam")',
               'span:has-text("Something went wrong")',
-              'span:has-text("Terjadi kesalahan")'
+              'span:has-text("Terjadi kesalahan")',
+              'span:has-text("Komentar tidak dapat")',
             ];
-            for (const sel of errorSelectors) {
+            for (const sel of errorTexts) {
               if (await page.locator(sel).first().isVisible()) return true;
             }
             // If comment box still has content after submit = rejected
@@ -706,16 +712,18 @@ async function main() {
             if (fs.existsSync(config.commentImagePath)) {
               console.log(`Attaching image to comment: ${config.commentImagePath}`);
               try {
-                const fileInput = page.locator('input[type="file"]').first();
-                if (await fileInput.count() > 0) {
-                  await fileInput.setInputFiles(config.commentImagePath);
+                // Scope file input to the comment form area to avoid triggering post composer
+                const commentForm = page.locator('form:has(div[contenteditable="true"][role="textbox"])').first();
+                const scopedFileInput = commentForm.locator('input[type="file"]').first();
+                if (await scopedFileInput.count() > 0) {
+                  await scopedFileInput.setInputFiles(config.commentImagePath);
                 } else {
-                  const photoBtn = page.locator([
+                  // Use filechooser event to intercept the file dialog safely
+                  const photoBtn = commentForm.locator([
                     'div[aria-label="Foto/video"][role="button"]',
                     'div[aria-label="Photo/video"][role="button"]',
                     'div[aria-label="Foto"][role="button"]',
-                    'div[aria-label="Photo"][role="button"]',
-                    'i[data-visualcompletion="css-img"][style*="camera"]'
+                    'div[aria-label="Photo"][role="button"]'
                   ].join(', ')).first();
                   if (await photoBtn.isVisible()) {
                     const [fileChooser] = await Promise.all([
@@ -724,11 +732,9 @@ async function main() {
                     ]);
                     if (fileChooser) {
                       await fileChooser.setFiles(config.commentImagePath);
-                    } else {
-                      await page.setInputFiles('input[type="file"]', config.commentImagePath);
                     }
                   } else {
-                    console.warn('Warning: Could not find photo button. Skipping image attachment.');
+                    console.warn('Warning: Could not find photo button in comment form. Skipping image.');
                   }
                 }
                 console.log('Waiting 4s for image upload preview...');
