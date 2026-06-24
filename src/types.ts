@@ -29,6 +29,7 @@ export interface BotConfig {
   maxCommentsPerGroup: number;
   commentTemplatePath: string;
   commentContent: string;
+  commentContentNoLink: string;
   scrollCount: number;
   scrollDelaySeconds: number;
   commentImagePath: string | null;

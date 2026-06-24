@@ -42,6 +42,11 @@ const getCommentContent = (templatePath: string): string => {
 };
 
 const commentTemplatePath = process.env.COMMENT_TEMPLATE_PATH || 'comment_template.txt';
+const rawCommentContent = getCommentContent(commentTemplatePath);
+
+// Auto-generate no-link version by stripping lines that contain URLs
+const stripLinks = (text: string): string =>
+  text.split('\n').filter(line => !line.trim().match(/^https?:\/\//i)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
 export const config: BotConfig = {
   userDataDir: path.resolve(process.env.FB_USER_DATA_DIR || 'user_data'),
@@ -56,7 +61,8 @@ export const config: BotConfig = {
     .filter(Boolean),
   maxCommentsPerGroup: parseInt(process.env.MAX_COMMENTS_PER_GROUP || '3', 10),
   commentTemplatePath: commentTemplatePath,
-  commentContent: getCommentContent(commentTemplatePath),
+  commentContent: rawCommentContent,
+  commentContentNoLink: stripLinks(rawCommentContent),
   scrollCount: parseInt(process.env.SCROLL_COUNT || '4', 10),
   scrollDelaySeconds: parseInt(process.env.SCROLL_DELAY_SECONDS || '3', 10),
   commentImagePath: process.env.COMMENT_IMAGE_PATH ? path.resolve(process.env.COMMENT_IMAGE_PATH) : null,

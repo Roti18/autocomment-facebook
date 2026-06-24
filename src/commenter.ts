@@ -656,7 +656,45 @@ async function main() {
 
           // Resolve comment content spintax
           const resolvedComment = resolveSpintax(config.commentContent);
-          console.log(`Submitting Comment:\n"${resolvedComment}"`);
+          console.log(`Submitting Comment (with links):\n"${resolvedComment}"`);
+
+          // Helper: check if FB rejected the comment (error toast or input still has text)
+          const isCommentRejected = async (): Promise<boolean> => {
+            // Check for FB error alert/toast
+            const errorSelectors = [
+              'div[role="alert"]',
+              'span:has-text("tidak dapat memposting")',
+              'span:has-text("can\'t post")',
+              'span:has-text("blocked")',
+              'span:has-text("diblokir")',
+              'span:has-text("spam")',
+              'span:has-text("Something went wrong")',
+              'span:has-text("Terjadi kesalahan")'
+            ];
+            for (const sel of errorSelectors) {
+              if (await page.locator(sel).first().isVisible()) return true;
+            }
+            // If comment box still has content after submit = rejected
+            try {
+              const boxText = await commentInput!.innerText();
+              if (boxText.trim().length > 0) return true;
+            } catch (_) {}
+            return false;
+          };
+
+          // Helper: submit a comment string and return true if successful
+          const submitComment = async (text: string): Promise<boolean> => {
+            await commentInput!.focus();
+            // Clear box first (Ctrl+A → Delete)
+            await page.keyboard.press('Control+a');
+            await page.keyboard.press('Delete');
+            await sleep(300);
+            await page.keyboard.insertText(text);
+            await sleep(800);
+            await page.keyboard.press('Enter');
+            await sleep(4000);
+            return !(await isCommentRejected());
+          };
 
           // Focus and paste instantly
           await commentInput.focus();
@@ -668,12 +706,10 @@ async function main() {
             if (fs.existsSync(config.commentImagePath)) {
               console.log(`Attaching image to comment: ${config.commentImagePath}`);
               try {
-                // Try direct file input first (fastest path)
                 const fileInput = page.locator('input[type="file"]').first();
                 if (await fileInput.count() > 0) {
                   await fileInput.setInputFiles(config.commentImagePath);
                 } else {
-                  // Click the camera/photo icon in the comment bar
                   const photoBtn = page.locator([
                     'div[aria-label="Foto/video"][role="button"]',
                     'div[aria-label="Photo/video"][role="button"]',
@@ -681,7 +717,6 @@ async function main() {
                     'div[aria-label="Photo"][role="button"]',
                     'i[data-visualcompletion="css-img"][style*="camera"]'
                   ].join(', ')).first();
-
                   if (await photoBtn.isVisible()) {
                     const [fileChooser] = await Promise.all([
                       page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null),
@@ -690,11 +725,10 @@ async function main() {
                     if (fileChooser) {
                       await fileChooser.setFiles(config.commentImagePath);
                     } else {
-                      // Last resort: global file input
                       await page.setInputFiles('input[type="file"]', config.commentImagePath);
                     }
                   } else {
-                    console.warn('Warning: Could not find photo button in comment bar. Skipping image attachment.');
+                    console.warn('Warning: Could not find photo button. Skipping image attachment.');
                   }
                 }
                 console.log('Waiting 4s for image upload preview...');
@@ -703,14 +737,26 @@ async function main() {
                 console.warn(`Warning: Image attach failed (${imgErr.message}). Sending text-only comment.`);
               }
             } else {
-              console.warn(`Warning: COMMENT_IMAGE_PATH set to "${config.commentImagePath}" but file does not exist. Skipping image.`);
+              console.warn(`Warning: COMMENT_IMAGE_PATH "${config.commentImagePath}" not found. Skipping image.`);
             }
           }
 
-          // Submit by pressing Enter
+          // Submit comment (with links first)
           await page.keyboard.press('Enter');
           console.log('Sending comment...');
-          await sleep(5000); // 5s verification and submission wait time
+          await sleep(4000);
+
+          // Check if FB rejected due to links
+          if (await isCommentRejected()) {
+            console.log(`  -> Comment with links was REJECTED by Facebook. Retrying without links...`);
+            const resolvedNoLink = resolveSpintax(config.commentContentNoLink);
+            const retryOk = await submitComment(resolvedNoLink);
+            if (retryOk) {
+              console.log(`  -> No-link comment ACCEPTED for post ID: ${item.post_id}`);
+            } else {
+              throw new Error('Comment rejected even without links. Skipping post.');
+            }
+          }
 
           // Update queue status in DB
           updateQueueStatus(item.id, 'success');
