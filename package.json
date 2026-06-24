@@ -1,0 +1,21 @@
+{
+  "name": "facebook-autocommenter",
+  "version": "1.0.0",
+  "description": "Facebook Auto Commenter Bot using Playwright and SQLite",
+  "main": "dist/commenter.js",
+  "scripts": {
+    "start": "ts-node src/commenter.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "playwright": "^1.61.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}
