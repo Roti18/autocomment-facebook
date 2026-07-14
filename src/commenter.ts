@@ -341,10 +341,13 @@ async function main() {
           continue; // skip post without text
         }
 
-        // ── Keyword check ──
-        const lowerText = postText.toLowerCase();
+        // ── Keyword check (fuzzy) ──
+        // Normalize: hapus spasi, strip, underscore, titik biar "vip day" match "vipday"
+        const normalize = (s: string) => s.toLowerCase().replace(/[\s\-_.]+/g, '');
+        const normText = normalize(postText);
         if (config.targetKeywords.length > 0) {
-          const matched = config.targetKeywords.some(kw => lowerText.includes(kw));
+          const normKeywords = config.targetKeywords.map(normalize);
+          const matched = normKeywords.some(kw => normText.includes(kw));
           if (!matched) {
             alreadyCommented.add(dedupKey);
             continue;
