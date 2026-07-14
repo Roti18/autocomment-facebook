@@ -1,36 +1,37 @@
-export interface Group {
-  id: number;
-  group_name: string | null;
-  group_url: string;
-  status: 'active' | 'inactive';
-}
-
-export interface CommentQueueItem {
-  id: number;
-  post_id: string;
-  group_id: number;
-  post_url: string;
-  post_text: string | null;
-  author_name: string | null;
-  status: 'pending' | 'success' | 'failed';
-  error_message: string | null;
-  created_at: string;
-  processed_at: string | null;
-}
-
 export interface BotConfig {
   userDataDir: string;
   headless: boolean;
-  minDelaySeconds: number;
-  maxDelaySeconds: number;
-  postIntervalMinutes: number;
-  myProfileUrl: string | null;
+
+  // Beranda scrolling
+  berandaScrollCount: number;
+  berandaScrollDelay: number;
+
+  // Keyword filters
   targetKeywords: string[];
-  maxCommentsPerGroup: number;
+
+  // Simulasi baca post
+  readingDelayMin: number;
+  readingDelayMax: number;
+
+  // Cooldown after comment
+  cooldownMin: number;
+  cooldownMax: number;
+
+  // Long break every N comments
+  longBreakInterval: number;
+  longBreakMinutes: number;
+
+  // Total limit
+  maxTotalComments: number;
+
+  // Comment content
   commentTemplatePath: string;
   commentContent: string;
   commentContentNoLink: string;
-  scrollCount: number;
-  scrollDelaySeconds: number;
+
+  // Image
   commentImagePath: string | null;
+
+  // Profile
+  myProfileUrl: string | null;
 }

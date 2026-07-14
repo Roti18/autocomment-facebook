@@ -3,89 +3,77 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { BotConfig } from './types';
 
-// Load .env file
 dotenv.config();
 
 /**
- * Spintax Resolver: Rotates text using {option1|option2|option3} format.
- * Supports nested structures by resolving from the innermost brackets outwards.
+ * Spintax Resolver: {option1|option2|option3}
  */
 export function resolveSpintax(text: string): string {
   const spintaxPattern = /\{([^{}]+)\}/g;
-  let matches = text.match(spintaxPattern);
-  
-  while (matches && matches.length > 0) {
-    for (const match of matches) {
-      const choices = match.slice(1, -1).split('|');
-      const selected = choices[Math.floor(Math.random() * choices.length)];
-      text = text.replace(match, selected);
-    }
-    matches = text.match(spintaxPattern);
+  let prev = '';
+  while (prev !== text) {
+    prev = text;
+    text = text.replace(spintaxPattern, (_match, group) => {
+      const choices = group.split('|');
+      return choices[Math.floor(Math.random() * choices.length)].trim();
+    });
   }
-  
   return text;
 }
 
-// Default values
-const DEFAULT_COMMENT_CONTENT = '{Halo|Hi|Permisi} kak, {ready parfumnya?|boleh minta info harga dan detailnya?}';
+const DEFAULT_COMMENT = '{Halo|Hi|Permisi|Pagi|Siang} kak, {ready parfumnya?|boleh minta info?|masih ada?}';
 
 const getCommentContent = (templatePath: string): string => {
   const resolvedPath = path.resolve(templatePath);
   if (fs.existsSync(resolvedPath)) {
     try {
       return fs.readFileSync(resolvedPath, 'utf8');
-    } catch (err) {
-      console.error('Error reading comment template file:', err);
-    }
+    } catch (_) {}
   }
-  return DEFAULT_COMMENT_CONTENT;
+  return DEFAULT_COMMENT;
 };
 
 const commentTemplatePath = process.env.COMMENT_TEMPLATE_PATH || 'comment_template.txt';
 const rawCommentContent = getCommentContent(commentTemplatePath);
 
-// Auto-generate no-link version by stripping lines that contain URLs
 const stripLinks = (text: string): string =>
-  text.split('\n').filter(line => !line.trim().match(/^https?:\/\//i)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  text
+    .split('\n')
+    .filter(line => !line.trim().match(/^https?:\/\//i))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
 export const config: BotConfig = {
-  userDataDir: path.resolve(process.env.FB_USER_DATA_DIR || 'user_data'),
+  userDataDir: path.resolve(process.env.FB_USER_DATA_DIR || './user_data'),
   headless: process.env.HEADLESS === 'true',
-  minDelaySeconds: parseInt(process.env.MIN_DELAY_SECONDS || '60', 10),
-  maxDelaySeconds: parseInt(process.env.MAX_DELAY_SECONDS || '180', 10),
-  postIntervalMinutes: parseInt(process.env.POST_INTERVAL_MINUTES || '60', 10),
-  myProfileUrl: process.env.MY_PROFILE_URL || null,
+
+  berandaScrollCount: parseInt(process.env.BERANDA_SCROLL_COUNT || '50', 10),
+  berandaScrollDelay: parseInt(process.env.BERANDA_SCROLL_DELAY || '5', 10),
+
   targetKeywords: (process.env.TARGET_KEYWORDS || '')
     .split(',')
-    .map((k) => k.trim().toLowerCase())
+    .map(k => k.trim().toLowerCase())
     .filter(Boolean),
-  maxCommentsPerGroup: parseInt(process.env.MAX_COMMENTS_PER_GROUP || '3', 10),
-  commentTemplatePath: commentTemplatePath,
+
+  readingDelayMin: parseInt(process.env.READING_DELAY_MIN || '15', 10),
+  readingDelayMax: parseInt(process.env.READING_DELAY_MAX || '40', 10),
+
+  cooldownMin: parseInt(process.env.COOLDOWN_MIN || '90', 10),
+  cooldownMax: parseInt(process.env.COOLDOWN_MAX || '300', 10),
+
+  longBreakInterval: parseInt(process.env.LONG_BREAK_INTERVAL || '4', 10),
+  longBreakMinutes: parseInt(process.env.LONG_BREAK_MINUTES || '12', 10),
+
+  maxTotalComments: parseInt(process.env.MAX_TOTAL_COMMENTS || '25', 10),
+
+  commentTemplatePath,
   commentContent: rawCommentContent,
   commentContentNoLink: stripLinks(rawCommentContent),
-  scrollCount: parseInt(process.env.SCROLL_COUNT || '4', 10),
-  scrollDelaySeconds: parseInt(process.env.SCROLL_DELAY_SECONDS || '3', 10),
-  commentImagePath: process.env.COMMENT_IMAGE_PATH ? path.resolve(process.env.COMMENT_IMAGE_PATH) : null,
-};
 
-// Default seed groups: parsed from groups.json if exists
-export const getSeedGroups = (): { name: string; url: string }[] => {
-  const jsonPath = path.resolve(process.cwd(), 'groups.json');
-  
-  if (fs.existsSync(jsonPath)) {
-    try {
-      const fileContent = fs.readFileSync(jsonPath, 'utf8');
-      const parsed = JSON.parse(fileContent);
-      if (Array.isArray(parsed)) {
-        return parsed.map((item: any) => ({
-          name: item.name || 'Unnamed Group',
-          url: item.url.trim(),
-        }));
-      }
-    } catch (jsonError) {
-      console.error('Error reading/parsing groups.json, falling back to empty list.', jsonError);
-    }
-  }
+  commentImagePath: process.env.COMMENT_IMAGE_PATH
+    ? path.resolve(process.env.COMMENT_IMAGE_PATH)
+    : null,
 
-  return [];
+  myProfileUrl: process.env.MY_PROFILE_URL || null,
 };

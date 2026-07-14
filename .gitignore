@@ -1,16 +1,13 @@
 node_modules/
 dist/
 user_data/
-facebook.db
-facebook.db-journal
 .env
 config.json
-FacebookElementsComment.txt
+facebook.db
+facebook.db-journal
 Facebook-post-Auto-Comment-Tools-For-Facebook/
 *.log
 
 # Data sensitif - jangan pernah di-commit
-groups.json
-groups*.json
 comment_template.txt
 assets/

@@ -1,78 +1,68 @@
-# Facebook Auto Commenter Bot
+# Facebook Auto Commenter — Beranda Scroll Mode
 
-A Node.js and TypeScript automation script designed to scrape post feeds from Facebook groups and automatically post comments using Playwright and SQLite (better-sqlite3). It uses a Split Queue (Scrape-then-Comment) architecture to prevent Virtual DOM parsing issues caused by infinite scrolling on Facebook.
+Bot auto-comment Facebook yang jalan di **beranda (homepage feed)**.
+Alurnya: scroll beranda → scan post → cocokin keyword → comment → lanjut scroll.
 
-## Features
+Tujuan utama: **menghindari banned** dengan simulasi aktivitas manusia yang natural.
 
-* Split Queue Architecture: Scrapes target posts and saves them to SQLite comments_queue first, then navigates directly to permalink URLs to post comments.
-* Anti-Detection & Stealth: Uses a custom User Agent, disables automation infobars, hides webdriver indicators, and runs in a persistent browser context to reuse login cookies.
-* Content Rotation: Supports Spintax format content rotation for comments to vary templates.
-* Smart Filtering: Ignores bot's own posts, verifies post age limits (under 5 days), matches keywords, and implements comment limits per group (default 3 max).
+## Cara Kerja
 
-## Requirements
+1. Login ke Facebook (manual pertama kali, session disimpan)
+2. Buka beranda (web.facebook.com)
+3. Scroll feed perlahan (delay random 4-7.5 detik per scroll)
+4. Setiap scroll, scan post yang terlihat:
+   - Skip post sendiri (by profile URL)
+   - Cek apakah mengandung keyword target
+   - Kalau cocok: buka post di tab baru
+   - Simulasi baca post (20-45 detik)
+   - Ketik komentar karakter-per-karakter (human-like typing)
+   - Kirim → kalau ditolak, retry tanpa link
+   - Cooldown 2-5 menit sebelum comment berikutnya
+   - Istirahat 15 menit setiap 4 komentar
+5. Lanjut scroll sampai limit atau abis scroll count
 
-* Node.js (version 18 or above recommended)
-* npm (Node Package Manager)
+## Fitur Anti-Banned
 
-## Installation
+- ✅ **Beranda-based** — bukan masuk grup satu per satu (looks natural)
+- ✅ **Character-by-character typing** — 20-80ms per karakter
+- ✅ **Reading simulation** — delay 20-45 detik sebelum comment
+- ✅ **Random jitter** — semua delay dikalikan 0.8x-1.5x
+- ✅ **Long break** — 15 menit istirahat setiap 4 komentar
+- ✅ **No-link fallback** — otomatis retry tanpa link kalau ditolak
+- ✅ **Cooldown 2-5 menit** antar komentar
+- ✅ **Skip own posts** — gak bakal comment post sendiri
+- ✅ **Keyword filter** — cuma comment post yang relevan
+- ✅ **Stealth init script** — sembunyiin webdriver detection
 
-1. Install project dependencies:
-   ```bash
-   npm install
-   ```
+## Instalasi
 
-2. Download the Chromium browser binaries required for Playwright:
-   ```bash
-   npx playwright install chromium
-   ```
+```bash
+npm install
+npx playwright install chromium
+```
 
-## Configuration
+## Konfigurasi
 
-1. Create a `.env` file in the root directory based on the `.env.example` file:
-   ```bash
-   cp .env.example .env
-   ```
+1. Copy `.env.example` ke `.env` dan isi:
+   - `HEADLESS=false` untuk login pertama, `true` setelah session tersimpan
+   - `TARGET_KEYWORDS` — keyword yang mau di-target (pisah koma)
+   - Atur delay, cooldown, dan limit sesuai kebutuhan
 
-2. Configure the following variables in `.env`:
-   * `HEADLESS`: Set to `false` to display the browser window (required for the first-time manual login) or `true` for background execution.
-   * `FB_USER_DATA_DIR`: Directory path to store browser session profiles.
-   * `MIN_DELAY_SECONDS` and `MAX_DELAY_SECONDS`: Random delay constraints between comments to mimic human behavior.
-   * `POST_INTERVAL_MINUTES`: Minimum duration to wait before posting to the same group again.
-   * `MY_PROFILE_URL`: Optional profile URL override. If blank, the bot will auto-detect your profile URL.
-   * `TARGET_KEYWORDS`: Comma-separated list of keywords that target posts must contain.
-   * `MAX_POST_AGE_DAYS`: Maximum age of posts to comment on (in days).
-   * `MAX_COMMENTS_PER_GROUP`: Maximum number of comments per group in a single run.
-   * `COMMENT_TEMPLATE_PATH`: Path to the comment template text file containing Spintax.
+2. (Opsional) `config.json` untuk auto-login:
+```json
+{
+  "email": "nomor_hp_atau_email",
+  "password": "password_fb"
+}
+```
 
-3. Optionally, create a `config.json` file in the root folder to supply authentication credentials for automatic login (to automatically fill username and password fields on the login screen):
-   ```json
-   {
-     "email": "your_email_or_phone",
-     "password": "your_password"
-   }
-   ```
+3. Edit `comment_template.txt` — template komentar pake format Spintax `{Halo|Hi} kak, {ready?|masih ada?}`
 
-4. Add your target Facebook group links to the `groups.json` file in the root folder:
-   ```json
-   [
-     {
-       "name": "test",
-       "url": "https://www.facebook.com/groups/1746971519808959/"
-     }
-   ]
-   ```
+## Cara Jalanin
 
-5. Populate your comment template options in the `comment_template.txt` file using Spintax formatting (e.g. `{Halo|Hi} kawan! {Ready?|Berapa harganya?}`).
+```bash
+npm start
+```
 
-## How to Run
-
-1. Start the bot:
-   ```bash
-   npm start
-   ```
-
-2. Complete first-time manual login:
-   * A Chromium browser window will open.
-   * Log in to your Facebook account and complete any security checkpoints or CAPTCHAs.
-   * Once you are on the Facebook home feed, the bot will automatically detect the active session, save it to the session directory, and begin scraping/commenting.
-   * On subsequent runs, the bot will reuse this session and bypass the login step entirely.
+Pertama kali: browser kebuka → login manual → bot deteksi session → jalan otomatis.
+Sesi selanjutnya: langsung jalan karena session tersimpan.
